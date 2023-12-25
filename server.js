@@ -24,11 +24,7 @@ const secret = "34kdjflksjfsldjf34lkjkdl";
   
   mongoose.connect("mongodb+srv://hossamdahbi626:eH8o0UNp6hUQrnyY@cluster0.r1s0spf.mongodb.net/test?retryWrites=true&w=majority");
 
-// Error handling function to send error responses and log errors
-const handleError = (res, error, message) => {
-  console.error(error);
-  res.status(500).json({ error: message });
-};
+
 
 app.post('/register', async (req, res) => {
   const { username, password } = req.body;
@@ -253,12 +249,8 @@ app.get('/post/:id', async (req, res) => {
 
 
 
-const port = 3001 || process.env.PORT
-if(port) {
-  
-app.listen(port, () => {
+
+app.listen(3001, () => {
   console.log('Server Running On Port 3001!');
 });
-}
 
-module.exports = app
