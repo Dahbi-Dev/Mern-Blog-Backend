@@ -9,8 +9,12 @@
     "routes": [
       
       {
-        "src": "/(.*)",
-        "dest": "/"
+        "src": "/users/(.*)",
+        "dest": "/users"
+      },
+      {
+        "src": "/post/(.*)",
+        "dest": "/post"
       }
     ]
   }
