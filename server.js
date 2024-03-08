@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const app = express();
-const User = require('./models/User');
+const User = require('./models/user');
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -82,7 +82,7 @@ app.post('/logout', (req, res) => {
   res.cookie('token', '').json('ok');
 });
 
-const UserModel = require('./models/User');
+const UserModel = require('./models/user');
 
 app.get('/users', async (req, res) => {
   try {
