@@ -4,7 +4,7 @@
   "description": "",
   "main": "server.js",
   "engines": {
-    "node": "18.x"
+    "node": ">=18.18.0 <19.0.0"
   },
   "dependencies": {
     "abab": "^2.0.6",
