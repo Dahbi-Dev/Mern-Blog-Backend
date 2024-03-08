@@ -15,7 +15,7 @@ app.use('/uploads', express.static(__dirname + '/uploads'));
 
 const Post = require('./models/post');
 
-app.use(cors({ credentials: true, origin: 'http://localhost:3000' }));
+app.use(cors({ credentials: true, origin: 'https://blog-mern-xi.vercel.app' }));
 app.use(express.json());
 app.use(cookieParser());
 
