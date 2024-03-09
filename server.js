@@ -15,7 +15,14 @@ app.use('/uploads', express.static(__dirname + '/uploads'));
 
 const Post = require('./models/post');
 
-app.use(cors({ credentials: true, origin: 'https://blog-mern-xi.vercel.app' }));
+// app.use(cors({ credentials: true, origin: 'https://blog-mern-xi.vercel.app' }));
+const corsOptions = {
+  credentials: true,
+  origin: 'https://mern-blog-frontend-fawn.vercel.app',
+};
+
+app.use(cors(corsOptions));
+
 app.use(express.json());
 app.use(cookieParser());
 
