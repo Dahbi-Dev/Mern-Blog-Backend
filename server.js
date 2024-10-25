@@ -16,7 +16,7 @@ const Post = require("./models/post");
 // Authentication middleware
 const authenticateToken = (req, res, next) => {
   const { token } = req.cookies;
-  
+
   if (!token) {
     return res.status(401).json({ message: "Authentication required" });
   }
@@ -56,11 +56,8 @@ function handleError(res, error, message) {
 // Public routes
 app.get("/", (req, res) => {
   res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+    
       <title>App Status</title>
       <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f0f0; }
@@ -75,7 +72,7 @@ app.get("/", (req, res) => {
         <p>Server is running smoothly on port 3001.</p>
       </div>
     </body>
-    </html>
+ 
   `);
 });
 
@@ -86,7 +83,7 @@ app.post("/register", async (req, res) => {
     if (existingUser) {
       return res.status(400).json({ message: "Username already exists" });
     }
-    
+
     const salt = bcrypt.genSaltSync(10);
     const hashedPassword = bcrypt.hashSync(password, salt);
     const userDoc = await User.create({ username, password: hashedPassword });
@@ -115,15 +112,17 @@ app.post("/login", async (req, res) => {
       { expiresIn: "1d" },
       (err, token) => {
         if (err) throw err;
-        res.cookie("token", token, {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: "strict",
-          maxAge: 24 * 60 * 60 * 1000 // 1 day
-        }).json({
-          id: userDoc._id,
-          username,
-        });
+        res
+          .cookie("token", token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "strict",
+            maxAge: 24 * 60 * 60 * 1000, // 1 day
+          })
+          .json({
+            id: userDoc._id,
+            username,
+          });
       }
     );
   } catch (error) {
@@ -132,10 +131,12 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/logout", authenticateToken, (req, res) => {
-  res.cookie("token", "", {
-    httpOnly: true,
-    expires: new Date(0)
-  }).json({ message: "Logged out successfully" });
+  res
+    .cookie("token", "", {
+      httpOnly: true,
+      expires: new Date(0),
+    })
+    .json({ message: "Logged out successfully" });
 });
 
 // Protected routes
@@ -155,19 +156,21 @@ app.get("/users", authenticateToken, isAdmin, async (req, res) => {
 // Configure multer
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, 'uploads/');
+    cb(null, "uploads/");
   },
   filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
+  },
 });
 
 const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
     const fileTypes = /jpeg|jpg|png|gif/;
-    const extname = fileTypes.test(path.extname(file.originalname).toLowerCase());
+    const extname = fileTypes.test(
+      path.extname(file.originalname).toLowerCase()
+    );
     const mimetype = fileTypes.test(file.mimetype);
     if (mimetype && extname) {
       return cb(null, true);
@@ -175,72 +178,83 @@ const upload = multer({
     cb(new Error("Only image files are allowed!"));
   },
   limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
-  }
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
 });
 
 // Post routes with authentication
-app.post("/post", authenticateToken, isAdmin, upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ message: "Image file is required" });
-    }
-
-    const { title, summary, content } = req.body;
-    const postDoc = await Post.create({
-      title,
-      summary,
-      content,
-      cover: req.file.path,
-      author: req.user.id,
-    });
-    res.json(postDoc);
-  } catch (error) {
-    handleError(res, error, "Failed to create post");
-  }
-});
-
-app.put("/post/:id", authenticateToken, upload.single("file"), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { title, summary, content } = req.body;
-    
-    const post = await Post.findById(id);
-    if (!post) {
-      return res.status(404).json({ message: "Post not found" });
-    }
-    
-    if (post.author.toString() !== req.user.id) {
-      return res.status(403).json({ message: "Not authorized to edit this post" });
-    }
-
-    const updateData = {
-      title,
-      summary,
-      content,
-    };
-
-    if (req.file) {
-      updateData.cover = req.file.path;
-      // Delete old image
-      if (post.cover) {
-        fs.unlink(post.cover, (err) => {
-          if (err) console.error("Error deleting old image:", err);
-        });
+app.post(
+  "/post",
+  authenticateToken,
+  isAdmin,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "Image file is required" });
       }
-    }
 
-    const updatedPost = await Post.findByIdAndUpdate(
-      id,
-      updateData,
-      { new: true }
-    ).populate("author", ["username"]);
-    
-    res.json(updatedPost);
-  } catch (error) {
-    handleError(res, error, "Failed to update post");
+      const { title, summary, content } = req.body;
+      const postDoc = await Post.create({
+        title,
+        summary,
+        content,
+        cover: req.file.path,
+        author: req.user.id,
+      });
+      res.json(postDoc);
+    } catch (error) {
+      handleError(res, error, "Failed to create post");
+    }
   }
-});
+);
+
+app.put(
+  "/post/:id",
+  authenticateToken,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { title, summary, content } = req.body;
+
+      const post = await Post.findById(id);
+      if (!post) {
+        return res.status(404).json({ message: "Post not found" });
+      }
+
+      if (post.author.toString() !== req.user.id) {
+        return res
+          .status(403)
+          .json({ message: "Not authorized to edit this post" });
+      }
+
+      const updateData = {
+        title,
+        summary,
+        content,
+      };
+
+      if (req.file) {
+        updateData.cover = req.file.path;
+        // Delete old image
+        if (post.cover) {
+          fs.unlink(post.cover, (err) => {
+            if (err) console.error("Error deleting old image:", err);
+          });
+        }
+      }
+
+      const updatedPost = await Post.findByIdAndUpdate(id, updateData, {
+        new: true,
+      }).populate("author", ["username"]);
+
+      res.json(updatedPost);
+    } catch (error) {
+      handleError(res, error, "Failed to update post");
+    }
+  }
+);
 
 app.delete("/post/:id", authenticateToken, async (req, res) => {
   try {
@@ -248,9 +262,14 @@ app.delete("/post/:id", authenticateToken, async (req, res) => {
     if (!post) {
       return res.status(404).json({ message: "Post not found" });
     }
-    
-    if (post.author.toString() !== req.user.id && req.user.username !== "Houssam") {
-      return res.status(403).json({ message: "Not authorized to delete this post" });
+
+    if (
+      post.author.toString() !== req.user.id &&
+      req.user.username !== "Houssam"
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Not authorized to delete this post" });
     }
 
     // Delete associated image
@@ -280,7 +299,9 @@ app.get("/posts", async (req, res) => {
 
 app.get("/post/:id", async (req, res) => {
   try {
-    const post = await Post.findById(req.params.id).populate("author", ["username"]);
+    const post = await Post.findById(req.params.id).populate("author", [
+      "username",
+    ]);
     if (!post) {
       return res.status(404).json({ message: "Post not found" });
     }
