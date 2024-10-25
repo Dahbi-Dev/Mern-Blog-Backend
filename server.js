@@ -12,6 +12,8 @@ require("dotenv").config();
 const app = express();
 const User = require("./models/user");
 const Post = require("./models/post");
+const Comment = require("./models/comment");
+const Reaction = require("./models/reaction");
 
 // Authentication middleware
 const authenticateToken = (req, res, next) => {
@@ -186,7 +188,7 @@ const upload = multer({
 app.post(
   "/post",
   authenticateToken,
-  isAdmin,
+
   upload.single("file"),
   async (req, res) => {
     try {
@@ -308,6 +310,138 @@ app.get("/post/:id", async (req, res) => {
     res.json(post);
   } catch (error) {
     handleError(res, error, "Failed to fetch post");
+  }
+});
+// Reaction endpoints
+// GET reactions endpoint
+app.get("/post/:id/reactions", async (req, res) => {
+  try {
+    const counts = await Reaction.aggregate([
+      { 
+        $match: { 
+          post: new mongoose.Types.ObjectId(req.params.id) 
+        } 
+      },
+      {
+        $group: {
+          _id: "$type",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const results = {
+      likes: 0,
+      dislikes: 0,
+      loves: 0,
+      fires: 0,
+    };
+
+    counts.forEach(({ _id, count }) => {
+      results[_id + "s"] = count;
+    });
+
+    res.json(results);
+  } catch (error) {
+    handleError(res, error, "Failed to fetch reactions");
+  }
+});
+
+// GET users who reacted endpoint
+app.get("/post/:id/reactions/users/:type", async (req, res) => {
+  try {
+    const { id, type } = req.params;
+
+    // Validate reaction type
+    if (!["like", "dislike", "love", "fire"].includes(type)) {
+      return res.status(400).json({ message: "Invalid reaction type" });
+    }
+
+    const reactions = await Reaction.find({
+      post: new mongoose.Types.ObjectId(id),
+      type,
+    }).populate("user", "username");
+
+    const users = reactions.map((reaction) => reaction.user);
+    res.json(users);
+  } catch (error) {
+    handleError(res, error, "Failed to fetch reaction users");
+  }
+});
+
+// POST reaction endpoint
+app.post("/post/:id/reaction", authenticateToken, async (req, res) => {
+  try {
+    const { type } = req.body;
+    const { id } = req.params;
+
+    // Validate reaction type
+    if (!["like", "dislike", "love", "fire"].includes(type)) {
+      return res.status(400).json({ message: "Invalid reaction type" });
+    }
+
+    // If user already reacted with the same type, remove the reaction
+    const existingReaction = await Reaction.findOne({
+      post: new mongoose.Types.ObjectId(id),
+      user: new mongoose.Types.ObjectId(req.user.id),
+      type,
+    });
+
+    if (existingReaction) {
+      await Reaction.deleteOne({ _id: existingReaction._id });
+      res.json({ message: "Reaction removed successfully" });
+    } else {
+      // Remove any existing reaction of different type
+      await Reaction.deleteOne({
+        post: new mongoose.Types.ObjectId(id),
+        user: new mongoose.Types.ObjectId(req.user.id),
+      });
+
+      // Create new reaction
+      await Reaction.create({
+        post: new mongoose.Types.ObjectId(id),
+        user: new mongoose.Types.ObjectId(req.user.id),
+        type,
+      });
+
+      res.json({ message: "Reaction added successfully" });
+    }
+  } catch (error) {
+    handleError(res, error, "Failed to update reaction");
+  }
+});
+
+// Comment endpoints
+app.get("/post/:id/comments", async (req, res) => {
+  try {
+    const comments = await Comment.find({ post: req.params.id })
+      .populate("author", "username")
+      .sort({ createdAt: -1 });
+    res.json(comments);
+  } catch (error) {
+    handleError(res, error, "Failed to fetch comments");
+  }
+});
+
+app.post("/post/:id/comment", authenticateToken, async (req, res) => {
+  try {
+    const { content } = req.body;
+    const { id } = req.params;
+
+    if (!content?.trim()) {
+      return res.status(400).json({ message: "Comment content is required" });
+    }
+
+    const comment = await Comment.create({
+      content,
+      post: id,
+      author: req.user.id,
+    });
+
+    const populatedComment = await comment.populate("author", "username");
+    res.json(populatedComment);
+  } catch (error) {
+    handleError(res, error, "Failed to create comment");
   }
 });
 
