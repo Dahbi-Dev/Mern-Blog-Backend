@@ -247,6 +247,7 @@
     "finalhandler": "^1.2.0",
     "find-cache-dir": "^3.3.2",
     "find-up": "^5.0.0",
+    "firebase-admin": "^12.7.0",
     "flat-cache": "^3.0.4",
     "flatted": "^3.2.7",
     "follow-redirects": "^1.15.2",

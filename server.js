@@ -15,26 +15,73 @@ const Post = require("./models/post");
 const Comment = require("./models/comment");
 const Reaction = require("./models/reaction");
 
-// Authentication middleware
-const authenticateToken = (req, res, next) => {
-  const { token } = req.cookies;
+// Middleware for cascading post deletion
+// Middleware for cascading post deletion
+const cascadeDeletePost = async (postId) => {
+  try {
+    const post = await Post.findById(postId);
+    if (!post) return;
 
+    // Delete associated image if exists
+    if (post.cover) {
+      fs.unlink(post.cover, (err) => {
+        if (err) console.error(`Error deleting image for post ${postId}:`, err);
+      });
+    }
+
+    // Delete all associated comments and reactions
+    await Promise.all([
+      Comment.deleteMany({ post: postId }),
+      Reaction.deleteMany({ post: postId }),
+    ]);
+
+    // Delete the post itself
+    await Post.findByIdAndDelete(postId);
+  } catch (error) {
+    console.error("Error in cascadeDeletePost:", error);
+    throw error;
+  }
+};
+
+// Authentication middleware
+// Enhance the authenticateToken middleware to check if user exists
+const authenticateToken = async (req, res, next) => {
+  const { token } = req.cookies;
   if (!token) {
-    return res.status(401).json({ message: "Authentication required" });
+    return res.status(401).json({
+      error: "AUTH_REQUIRED",
+      message: "Authentication required",
+    });
   }
 
-  jwt.verify(token, process.env.SECRET, {}, (err, info) => {
-    if (err) {
-      return res.status(403).json({ message: "Invalid or expired token" });
+  try {
+    const decoded = jwt.verify(token, process.env.SECRET);
+
+    // Check if user still exists in database
+    const userExists = await User.findById(decoded.id);
+    if (!userExists) {
+      res.clearCookie("token");
+      return res.status(401).json({
+        error: "USER_NOT_FOUND",
+        message: "User no longer exists",
+      });
     }
-    req.user = info;
+
+    req.user = decoded;
     next();
-  });
+  } catch (err) {
+    res.clearCookie("token");
+    return res.status(403).json({
+      error: "INVALID_TOKEN",
+      message: "Invalid or expired token",
+    });
+  }
 };
+const admin = process.env.ADMIN_EMAIL; //email admin
 
 // Admin middleware (for Houssam-only routes)
 const isAdmin = (req, res, next) => {
-  if (req.user.username !== "Houssam") {
+  if (req.user.username !== admin) {
     return res.status(403).json({ message: "Admin access required" });
   }
   next();
@@ -45,6 +92,29 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use(cors({ credentials: true, origin: process.env.URL }));
 app.use(express.json());
 app.use(cookieParser());
+// Enhanced error handling middleware
+app.use(async (err, req, res, next) => {
+  console.error(err.stack);
+
+  if (err.name === "TokenExpiredError" || err.name === "JsonWebTokenError") {
+    return res.status(401).json({
+      error: "AUTH_ERROR",
+      message: "Session expired. Please login again.",
+    });
+  }
+
+  if (err.name === "ValidationError") {
+    return res.status(400).json({
+      error: "VALIDATION_ERROR",
+      message: err.message,
+    });
+  }
+
+  res.status(500).json({
+    error: "SERVER_ERROR",
+    message: "An unexpected error occurred",
+  });
+});
 
 // MongoDB connection
 mongoose.connect(process.env.MONGODB_URI);
@@ -55,40 +125,43 @@ function handleError(res, error, message) {
   res.status(500).json({ message, error: error.message });
 }
 
-// Public routes
+// Home route
 app.get("/", (req, res) => {
   res.send(`
-  
-    
-      <title>App Status</title>
-      <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f0f0; }
-        .container { text-align: center; padding: 20px; background-color: #ffffff; border-radius: 10px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); }
-        h1 { font-size: 2.5rem; color: #333333; }
-        p { font-size: 1.2rem; color: #666666; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <h1>App Running</h1>
-        <p>Server is running smoothly on port 3001.</p>
-      </div>
-    </body>
- 
+    <div style="text-align: center; padding: 20px;">
+      <h1>Server Running</h1>
+      <p>Server is running on port ${process.env.PORT || 3001}</p>
+    </div>
   `);
 });
 
+// Auth routes
 app.post("/register", async (req, res) => {
-  const { username, password } = req.body;
+  const { username, email, password } = req.body;
   try {
-    const existingUser = await User.findOne({ username });
+    const existingUser = await User.findOne({
+      $or: [{ username }, { email }],
+    });
+
     if (existingUser) {
-      return res.status(400).json({ message: "Username already exists" });
+      if (existingUser.username === username) {
+        return res.status(400).json({ message: "Username already exists" });
+      }
+      if (existingUser.email === email) {
+        return res.status(400).json({ message: "Email already registered" });
+      }
     }
 
     const salt = bcrypt.genSaltSync(10);
     const hashedPassword = bcrypt.hashSync(password, salt);
-    const userDoc = await User.create({ username, password: hashedPassword });
+
+    const userDoc = await User.create({
+      username,
+      email,
+      password: hashedPassword,
+      isAdmin: true, // Check if user is admin based on email
+    });
+
     res.json({ message: "Registration successful", id: userDoc._id });
   } catch (e) {
     handleError(res, e, "Registration failed");
@@ -96,9 +169,9 @@ app.post("/register", async (req, res) => {
 });
 
 app.post("/login", async (req, res) => {
-  const { username, password } = req.body;
+  const { email, password } = req.body;
   try {
-    const userDoc = await User.findOne({ username });
+    const userDoc = await User.findOne({ email });
     if (!userDoc) {
       return res.status(400).json({ message: "User not found" });
     }
@@ -109,9 +182,14 @@ app.post("/login", async (req, res) => {
     }
 
     jwt.sign(
-      { username, id: userDoc._id },
+      {
+        email,
+        id: userDoc._id,
+        username: userDoc.username,
+        isAdmin: userDoc.isAdmin,
+      },
       process.env.SECRET,
-      { expiresIn: "1d" },
+      { expiresIn: "7d" },
       (err, token) => {
         if (err) throw err;
         res
@@ -119,11 +197,13 @@ app.post("/login", async (req, res) => {
             httpOnly: true,
             secure: process.env.NODE_ENV === "production",
             sameSite: "strict",
-            maxAge: 24 * 60 * 60 * 1000, // 1 day
+            maxAge: 7 * 24 * 60 * 60 * 1000,
           })
           .json({
             id: userDoc._id,
-            username,
+            username: userDoc.username,
+            email: userDoc.email,
+            isAdmin: userDoc.isAdmin,
           });
       }
     );
@@ -141,26 +221,35 @@ app.post("/logout", authenticateToken, (req, res) => {
     .json({ message: "Logged out successfully" });
 });
 
-// Protected routes
+// User routes
 app.get("/profile", authenticateToken, (req, res) => {
   res.json(req.user);
 });
 
-app.get("/users", authenticateToken, isAdmin, async (req, res) => {
+// Delete a post by ID with proper authorization
+app.delete("/post/:id", authenticateToken, isAdmin, async (req, res) => {
   try {
-    const users = await User.find({}, { password: 0 });
-    res.json(users);
+    const post = await Post.findById(req.params.id);
+    if (!post) {
+      return res.status(404).json({ message: "Post not found" });
+    }
+
+    // Since isAdmin is already checked, we can directly delete
+    await cascadeDeletePost(req.params.id); // Cascade delete post and its associated content
+    res.json({
+      message: "Post and associated content deleted successfully",
+    });
   } catch (error) {
-    handleError(res, error, "Failed to fetch users");
+    handleError(res, error, "Failed to delete post and associated content");
   }
 });
 
 // Configure multer
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
+  destination: (req, file, cb) => {
     cb(null, "uploads/");
   },
-  filename: function (req, file, cb) {
+  filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     cb(null, uniqueSuffix + path.extname(file.originalname));
   },
@@ -184,11 +273,10 @@ const upload = multer({
   },
 });
 
-// Post routes with authentication
+// Post routes
 app.post(
   "/post",
   authenticateToken,
-
   upload.single("file"),
   async (req, res) => {
     try {
@@ -213,7 +301,7 @@ app.post(
 
 app.put(
   "/post/:id",
-  authenticateToken,
+  authenticateToken,isAdmin,
   upload.single("file"),
   async (req, res) => {
     try {
@@ -225,21 +313,16 @@ app.put(
         return res.status(404).json({ message: "Post not found" });
       }
 
-      if (post.author.toString() !== req.user.id) {
+      if (post.author.toString() !== req.user.id && !req.user.isAdmin) {
         return res
           .status(403)
           .json({ message: "Not authorized to edit this post" });
       }
 
-      const updateData = {
-        title,
-        summary,
-        content,
-      };
+      const updateData = { title, summary, content };
 
       if (req.file) {
         updateData.cover = req.file.path;
-        // Delete old image
         if (post.cover) {
           fs.unlink(post.cover, (err) => {
             if (err) console.error("Error deleting old image:", err);
@@ -258,6 +341,7 @@ app.put(
   }
 );
 
+// Delete a post by ID with proper authorization
 app.delete("/post/:id", authenticateToken, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -265,39 +349,74 @@ app.delete("/post/:id", authenticateToken, async (req, res) => {
       return res.status(404).json({ message: "Post not found" });
     }
 
-    if (
-      post.author.toString() !== req.user.id &&
-      req.user.username !== "Houssam"
-    ) {
-      return res
-        .status(403)
-        .json({ message: "Not authorized to delete this post" });
-    }
-
-    // Delete associated image
-    if (post.cover) {
-      fs.unlink(post.cover, (err) => {
-        if (err) console.error("Error deleting image:", err);
+    // Allow deletion if user is admin or post author
+    const isAuthor = post.author.toString() === req.user.id;
+    if (!req.user.isAdmin && !isAuthor) {
+      return res.status(403).json({
+        message: "Not authorized to delete this post",
       });
     }
 
-    await Post.findByIdAndDelete(req.params.id);
-    res.json({ message: "Post deleted successfully" });
+    // Use the existing cascadeDeletePost function
+    await cascadeDeletePost(req.params.id);
+
+    res.json({
+      message: "Post and associated content deleted successfully",
+    });
   } catch (error) {
-    handleError(res, error, "Failed to delete post");
+    handleError(res, error, "Failed to delete post and associated content");
   }
 });
 
 app.get("/posts", async (req, res) => {
   try {
+    // First find posts where the referenced author doesn't exist anymore
+    const postsToDelete = await Post.find().populate("author").lean();
+
+    // Get the IDs of posts where author populated as null
+    const postIdsToDelete = postsToDelete
+      .filter((post) => !post.author)
+      .map((post) => post._id);
+
+    // Delete posts from deleted users
+    if (postIdsToDelete.length > 0) {
+      // Delete associated reactions
+      await Reaction.deleteMany({ post: { $in: postIdsToDelete } });
+
+      // Delete associated comments
+      await Comment.deleteMany({ post: { $in: postIdsToDelete } });
+
+      // Delete the posts
+      await Post.deleteMany({ _id: { $in: postIdsToDelete } });
+
+      // If files exist, you might want to delete the cover images too
+      postsToDelete
+        .filter((post) => !post.author && post.cover)
+        .forEach((post) => {
+          try {
+            fs.unlinkSync(post.cover);
+          } catch (err) {
+            console.error(`Failed to delete file ${post.cover}:`, err);
+          }
+        });
+    }
+
+    // Fetch remaining posts with valid authors
     const posts = await Post.find()
       .populate("author", ["username"])
       .sort({ createdAt: -1 });
+
     res.json(posts);
   } catch (error) {
     handleError(res, error, "Failed to fetch posts");
   }
 });
+
+// Helper function for error handling
+function handleError(res, error, message) {
+  console.error(error);
+  res.status(500).json({ error: message });
+}
 
 app.get("/post/:id", async (req, res) => {
   try {
@@ -312,15 +431,89 @@ app.get("/post/:id", async (req, res) => {
     handleError(res, error, "Failed to fetch post");
   }
 });
-// Reaction endpoints
-// GET reactions endpoint
+
+app.get("/post/:id/comments", async (req, res) => {
+  try {
+    // First find comments where the referenced author doesn't exist anymore
+    const commentsToDelete = await Comment.find({
+      author: { $exists: true },
+    }).populate("author");
+
+    // Get the IDs of comments where author populated as null
+    const commentIdsToDelete = commentsToDelete
+      .filter((comment) => !comment.author)
+      .map((comment) => comment._id);
+
+    // Delete those comments
+    if (commentIdsToDelete.length > 0) {
+      await Comment.deleteMany({ _id: { $in: commentIdsToDelete } });
+    }
+
+    // Fetch remaining comments for the post
+    const comments = await Comment.find({
+      post: req.params.id,
+    })
+      .populate("author", "username")
+      .sort({ createdAt: -1 });
+
+    res.json(comments);
+  } catch (error) {
+    handleError(res, error, "Failed to fetch comments");
+  }
+});
+
+// Helper function for error handling
+function handleError(res, error, message) {
+  console.error(error);
+  res.status(500).json({ error: message });
+}
+
+// Other comment routes (e.g., posting a comment)
+app.post("/post/:id/comment", authenticateToken, async (req, res) => {
+  try {
+    const { content } = req.body;
+    const { id } = req.params;
+
+    if (!content?.trim()) {
+      return res.status(400).json({ message: "Comment content is required" });
+    }
+
+    const comment = await Comment.create({
+      content,
+      post: id,
+      author: req.user.id,
+    });
+
+    const populatedComment = await comment.populate("author", "username");
+    res.status(201).json(populatedComment);
+  } catch (error) {
+    handleError(res, error, "Failed to create comment");
+  }
+});
+
 app.get("/post/:id/reactions", async (req, res) => {
   try {
+    // First find reactions where the referenced user doesn't exist anymore
+    const reactionsToDelete = await Reaction.find({
+      user: { $exists: true },
+    }).populate("user");
+
+    // Get the IDs of reactions where user populated as null
+    const reactionIdsToDelete = reactionsToDelete
+      .filter((reaction) => !reaction.user)
+      .map((reaction) => reaction._id);
+
+    // Delete reactions from deleted users
+    if (reactionIdsToDelete.length > 0) {
+      await Reaction.deleteMany({ _id: { $in: reactionIdsToDelete } });
+    }
+
+    // Now get counts of remaining valid reactions
     const counts = await Reaction.aggregate([
-      { 
-        $match: { 
-          post: new mongoose.Types.ObjectId(req.params.id) 
-        } 
+      {
+        $match: {
+          post: new mongoose.Types.ObjectId(req.params.id),
+        },
       },
       {
         $group: {
@@ -347,40 +540,21 @@ app.get("/post/:id/reactions", async (req, res) => {
   }
 });
 
-// GET users who reacted endpoint
-app.get("/post/:id/reactions/users/:type", async (req, res) => {
-  try {
-    const { id, type } = req.params;
+// Helper function for error handling
+function handleError(res, error, message) {
+  console.error(error);
+  res.status(500).json({ error: message });
+}
 
-    // Validate reaction type
-    if (!["like", "dislike", "love", "fire"].includes(type)) {
-      return res.status(400).json({ message: "Invalid reaction type" });
-    }
-
-    const reactions = await Reaction.find({
-      post: new mongoose.Types.ObjectId(id),
-      type,
-    }).populate("user", "username");
-
-    const users = reactions.map((reaction) => reaction.user);
-    res.json(users);
-  } catch (error) {
-    handleError(res, error, "Failed to fetch reaction users");
-  }
-});
-
-// POST reaction endpoint
-app.post("/post/:id/reaction", authenticateToken, async (req, res) => {
+app.post("/post/:id/addreaction", authenticateToken, async (req, res) => {
   try {
     const { type } = req.body;
     const { id } = req.params;
 
-    // Validate reaction type
     if (!["like", "dislike", "love", "fire"].includes(type)) {
       return res.status(400).json({ message: "Invalid reaction type" });
     }
 
-    // If user already reacted with the same type, remove the reaction
     const existingReaction = await Reaction.findOne({
       post: new mongoose.Types.ObjectId(id),
       user: new mongoose.Types.ObjectId(req.user.id),
@@ -391,13 +565,11 @@ app.post("/post/:id/reaction", authenticateToken, async (req, res) => {
       await Reaction.deleteOne({ _id: existingReaction._id });
       res.json({ message: "Reaction removed successfully" });
     } else {
-      // Remove any existing reaction of different type
       await Reaction.deleteOne({
         post: new mongoose.Types.ObjectId(id),
         user: new mongoose.Types.ObjectId(req.user.id),
       });
 
-      // Create new reaction
       await Reaction.create({
         post: new mongoose.Types.ObjectId(id),
         user: new mongoose.Types.ObjectId(req.user.id),
@@ -410,40 +582,151 @@ app.post("/post/:id/reaction", authenticateToken, async (req, res) => {
     handleError(res, error, "Failed to update reaction");
   }
 });
+// Reaction users route
+app.get(
+  "/post/:id/reactions/users/:type",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { id, type } = req.params;
 
-// Comment endpoints
-app.get("/post/:id/comments", async (req, res) => {
+      if (!["like", "dislike", "love", "fire"].includes(type)) {
+        return res.status(400).json({ message: "Invalid reaction type" });
+      }
+
+      const reactions = await Reaction.find({
+        post: id,
+        type: type.replace("s", ""), // Remove 's' from plural form
+      }).populate("user", "username");
+
+      const users = reactions.map((reaction) => ({
+        id: reaction.user._id,
+        username: reaction.user.username,
+      }));
+
+      res.json(users);
+    } catch (error) {
+      handleError(res, error, "Failed to fetch reaction users");
+    }
+  }
+);
+
+//  Get all users (admin only)
+app.get("/admin/users", authenticateToken, isAdmin, async (req, res) => {
   try {
-    const comments = await Comment.find({ post: req.params.id })
-      .populate("author", "username")
-      .sort({ createdAt: -1 });
-    res.json(comments);
+    const users = await User.find(
+      {},
+      {
+        password: 0,
+        resetPasswordToken: 0,
+        resetPasswordExpires: 0,
+      }
+    );
+    res.json(users);
   } catch (error) {
-    handleError(res, error, "Failed to fetch comments");
+    handleError(res, error, "Failed to fetch users");
   }
 });
 
-app.post("/post/:id/comment", authenticateToken, async (req, res) => {
+// Delete user (admin only)
+app.delete("/admin/users/:id", authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { content } = req.body;
-    const { id } = req.params;
+    const userId = req.params.id;
 
-    if (!content?.trim()) {
-      return res.status(400).json({ message: "Comment content is required" });
+    // Don't allow admin to delete themselves
+    if (userId === req.user.id) {
+      return res
+        .status(400)
+        .json({ message: "Cannot delete your own admin account" });
     }
 
-    const comment = await Comment.create({
-      content,
-      post: id,
-      author: req.user.id,
-    });
+    // Find all posts by this user
+    const userPosts = await Post.find({ author: userId });
 
-    const populatedComment = await comment.populate("author", "username");
-    res.json(populatedComment);
+    // Delete all posts and their associated content
+    for (const post of userPosts) {
+      await cascadeDeletePost(post._id);
+    }
+
+    // Delete all comments by this user on other posts
+    await Comment.deleteMany({ author: userId });
+
+    // Delete all reactions by this user
+    await Reaction.deleteMany({ user: userId });
+
+    // Finally delete the user
+    const deletedUser = await User.findByIdAndDelete(userId);
+
+    if (!deletedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json({
+      message: "User and all associated content deleted successfully",
+    });
   } catch (error) {
-    handleError(res, error, "Failed to create comment");
+    handleError(res, error, "Failed to delete user");
   }
 });
+
+// Get user stats (admin only)
+app.get(
+  "/admin/users/:id/stats",
+  authenticateToken,
+  isAdmin,
+  async (req, res) => {
+    try {
+      const userId = req.params.id;
+
+      const stats = {
+        postsCount: await Post.countDocuments({ author: userId }),
+        commentsCount: await Comment.countDocuments({ author: userId }),
+        reactionsCount: await Reaction.countDocuments({ user: userId }),
+      };
+
+      res.json(stats);
+    } catch (error) {
+      handleError(res, error, "Failed to fetch user stats");
+    }
+  }
+);
+
+// Update user role (admin only)
+app.patch(
+  "/admin/users/:id/role",
+  authenticateToken,
+  isAdmin,
+  async (req, res) => {
+    try {
+      const userId = req.params.id;
+
+      // Don't allow admin to change their own role
+      if (userId === req.user.id) {
+        return res.status(400).json({
+          message: "Cannot modify your own admin status",
+        });
+      }
+
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Toggle isAdmin status
+      user.isAdmin = !user.isAdmin;
+      await user.save();
+
+      res.json({
+        message: `User role updated successfully. New role: ${
+          user.isAdmin ? "Admin" : "User"
+        }`,
+        isAdmin: user.isAdmin,
+      });
+    } catch (error) {
+      handleError(res, error, "Failed to update user role");
+    }
+  }
+);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
