@@ -18,7 +18,14 @@ const Reaction = require("./models/reaction");
 
 // Middleware setup
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-app.use(cors({ credentials: true, origin: process.env.URL }));
+app.use(cors({
+  origin: true, // Allow all origins
+  credentials: true, // Allow credentials
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'], // Allow all methods
+  allowedHeaders: ['Content-Type', 'Authorization'] // Allow these headers
+}));
+
+
 app.use(express.json());
 app.use(cookieParser());
 // Enhanced error handling middleware
