@@ -21,8 +21,13 @@ app.use(
   cors({
     origin: true, // Allow all origins
     credentials: true, // Allow credentials
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"], // Allow all methods
-    allowedHeaders: ["Content-Type", "Authorization"], // Allow these headers
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"], // Allow all common HTTP methods
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+    ], // Allow common headers
   })
 );
 
@@ -170,7 +175,7 @@ app.post("/register", async (req, res) => {
       username,
       email,
       password: hashedPassword,
-      isAdmin: true, // Check if user is admin based on email
+      isAdmin: email === process.env.ADMIN_EMAIL
     });
 
     res.json({ message: "Registration successful", id: userDoc._id });
@@ -203,19 +208,19 @@ app.post("/login", async (req, res) => {
       { expiresIn: "7d" },
       (err, token) => {
         if (err) throw err;
-        res
-          .cookie("token", token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "strict",
-            maxAge: 7 * 24 * 60 * 60 * 1000,
-          })
-          .json({
-            id: userDoc._id,
-            username: userDoc.username,
-            email: userDoc.email,
-            isAdmin: userDoc.isAdmin,
-          });
+        res.cookie("token", token, {
+          httpOnly: false, // Allow JavaScript access
+          secure: true,
+          sameSite: 'none', // Allow cross-site cookies
+          maxAge: 7 * 24 * 60 * 60 * 1000
+        })
+        .json({
+          id: userDoc._id,
+          username: userDoc.username,
+          email: userDoc.email,
+          isAdmin: userDoc.isAdmin,
+          token: token // Send token in response for localStorage
+        });
       }
     );
   } catch (error) {
@@ -223,13 +228,17 @@ app.post("/login", async (req, res) => {
   }
 });
 
-app.post("/logout", authenticateToken, (req, res) => {
-  res
-    .cookie("token", "", {
-      httpOnly: true,
+app.post("/logout", async (req, res) => {
+  try {
+    res.cookie("token", "", {
+      httpOnly: false,
+      secure: true,
+      sameSite: 'none',
       expires: new Date(0),
-    })
-    .json({ message: "Logged out successfully" });
+    }).json({ message: "Logged out successfully" });
+  } catch (error) {
+    handleError(res, error, "Logout failed");
+  }
 });
 
 // Generate and send reset code
@@ -302,9 +311,20 @@ app.post("/reset-password", async (req, res) => {
   }
 });
 
-// User routes
-app.get("/profile", authenticateToken, (req, res) => {
-  res.json(req.user);
+// Modified profile route to accept token from header
+app.get("/profile", async (req, res) => {
+  try {
+    const token = req.cookies.token || req.headers.authorization?.split(" ")[1];
+    
+    if (!token) {
+      return res.status(401).json({ message: "No token provided" });
+    }
+
+    const decoded = jwt.verify(token, process.env.SECRET);
+    res.json(decoded);
+  } catch (error) {
+    res.status(401).json({ message: "Invalid or expired token" });
+  }
 });
 
 // Delete a post by ID with proper authorization
