@@ -8,6 +8,8 @@ const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
+const favicon = require('serve-favicon');
+
 
 const app = express();
 const User = require("./models/user");
@@ -15,35 +17,25 @@ const Post = require("./models/post");
 const Comment = require("./models/comment");
 const Reaction = require("./models/reaction");
 
-
 // Middleware setup
+// Middleware to serve static files
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Optional: Serve favicon if desired
+app.use(favicon(path.join(__dirname, 'public', 'favicon.ico')));
+
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-app.use(cors({ credentials: true, origin: process.env.URL }));
+app.use(
+  cors({
+    credentials: true,
+    origin: "https://mern-blog-frontend-fawn.vercel.app",
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    exposedHeaders: ["set-cookie"],
+  })
+);
 app.use(express.json());
 app.use(cookieParser());
-// Enhanced error handling middleware
-// app.use(async (err, req, res, next) => {
-//   console.error(err.stack);
-
-//   if (err.name === "TokenExpiredError" || err.name === "JsonWebTokenError") {
-//     return res.status(401).json({
-//       error: "AUTH_ERROR",
-//       message: "Session expired. Please login again.",
-//     });
-//   }
-
-//   if (err.name === "ValidationError") {
-//     return res.status(400).json({
-//       error: "VALIDATION_ERROR",
-//       message: err.message,
-//     });
-//   }
-
-//   res.status(500).json({
-//     error: "SERVER_ERROR",
-//     message: "An unexpected error occurred",
-//   });
-// });
 
 // MongoDB connection
 mongoose.connect(process.env.MONGODB_URI);
@@ -53,7 +45,6 @@ function handleError(res, error, message) {
   console.error(error);
   res.status(500).json({ message, error: error.message });
 }
-
 
 // Authentication middleware
 const authenticateToken = async (req, res, next) => {
@@ -130,15 +121,21 @@ const cascadeDeletePost = async (postId) => {
   }
 };
 
-
-
 // Home route
 app.get("/", (req, res) => {
   res.send(`
-    <div style="text-align: center; padding: 20px;">
-      <h1>Server Running</h1>
-      <p>Server is running on port ${process.env.PORT || 3001}</p>
-    </div>
+    <html>
+      <head>
+        <link rel="icon" href="./public/favicon.ico" type="image/x-icon">
+        <title>Home</title>
+      </head>
+      <body>
+        <div style="text-align: center; padding: 20px;">
+          <h1>Server Running</h1>
+          <p>Server is running on port ${process.env.PORT || 3001}</p>
+        </div>
+      </body>
+    </html>
   `);
 });
 
@@ -199,12 +196,14 @@ app.post("/login", async (req, res) => {
       { expiresIn: "7d" },
       (err, token) => {
         if (err) throw err;
+
         res
           .cookie("token", token, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "strict",
+            secure: true, // Required for HTTPS
+            sameSite: "none", // Required for cross-origin cookies
             maxAge: 7 * 24 * 60 * 60 * 1000,
+            domain: ".vercel.app", // Optional: if you need to share cookies across subdomains
           })
           .json({
             id: userDoc._id,
@@ -228,13 +227,12 @@ app.post("/logout", authenticateToken, (req, res) => {
     .json({ message: "Logged out successfully" });
 });
 
-
 // Generate and send reset code
 app.post("/forgot-password", async (req, res) => {
   try {
     const { email } = req.body;
     const user = await User.findOne({ email });
-    
+
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -242,7 +240,7 @@ app.post("/forgot-password", async (req, res) => {
     // Generate a 6-digit code
     const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
     const hashCode = bcrypt.hashSync(resetCode, 10);
-    
+
     // Set token expiration to 15 minutes from now
     const expirationTime = new Date();
     expirationTime.setMinutes(expirationTime.getMinutes() + 15);
@@ -253,10 +251,10 @@ app.post("/forgot-password", async (req, res) => {
     await user.save();
 
     // Return the code (in production, this would be sent via email)
-    res.json({ 
+    res.json({
       message: "Reset code generated successfully",
       resetCode, // Remove this in production
-      expiresIn: "15 minutes"
+      expiresIn: "15 minutes",
     });
   } catch (error) {
     handleError(res, error, "Failed to generate reset code");
@@ -267,22 +265,22 @@ app.post("/forgot-password", async (req, res) => {
 app.post("/reset-password", async (req, res) => {
   try {
     const { email, resetCode, newPassword } = req.body;
-    const user = await User.findOne({ 
+    const user = await User.findOne({
       email,
-      resetPasswordExpires: { $gt: new Date() }
+      resetPasswordExpires: { $gt: new Date() },
     });
 
     if (!user) {
-      return res.status(400).json({ 
-        message: "Invalid or expired reset code" 
+      return res.status(400).json({
+        message: "Invalid or expired reset code",
       });
     }
 
     // Verify the reset code
     const isValidCode = bcrypt.compareSync(resetCode, user.resetPasswordToken);
     if (!isValidCode) {
-      return res.status(400).json({ 
-        message: "Invalid reset code" 
+      return res.status(400).json({
+        message: "Invalid reset code",
       });
     }
 
@@ -380,22 +378,27 @@ app.post(
 const adminRouter = express.Router();
 
 // Delete any post (admin-only)
-adminRouter.delete("/post/:id", authenticateToken, isAdmin, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.id);
-    if (!post) {
-      return res.status(404).json({ message: "Post not found" });
-    }
+adminRouter.delete(
+  "/post/:id",
+  authenticateToken,
+  isAdmin,
+  async (req, res) => {
+    try {
+      const post = await Post.findById(req.params.id);
+      if (!post) {
+        return res.status(404).json({ message: "Post not found" });
+      }
 
-    // Since isAdmin is already checked, we can directly delete
-    await cascadeDeletePost(req.params.id); // Cascade delete post and its associated content
-    res.json({
-      message: "Post and associated content deleted successfully",
-    });
-  } catch (error) {
-    handleError(res, error, "Failed to delete post and associated content");
+      // Since isAdmin is already checked, we can directly delete
+      await cascadeDeletePost(req.params.id); // Cascade delete post and its associated content
+      res.json({
+        message: "Post and associated content deleted successfully",
+      });
+    } catch (error) {
+      handleError(res, error, "Failed to delete post and associated content");
+    }
   }
-});
+);
 
 // Edit any post (admin-only)
 adminRouter.put(
@@ -447,7 +450,9 @@ app.delete("/post/:id", authenticateToken, async (req, res) => {
 
     // Check if the logged-in user is the author of the post
     if (post.author.toString() !== req.user.id) {
-      return res.status(403).json({ message: "You are not authorized to delete this post" });
+      return res
+        .status(403)
+        .json({ message: "You are not authorized to delete this post" });
     }
 
     await cascadeDeletePost(req.params.id);
