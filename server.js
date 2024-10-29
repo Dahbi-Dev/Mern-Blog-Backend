@@ -8,6 +8,8 @@ const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
+const cloudinary = require("cloudinary").v2;
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
 
 const app = express();
 const User = require("./models/user");
@@ -15,8 +17,25 @@ const Post = require("./models/post");
 const Comment = require("./models/comment");
 const Reaction = require("./models/reaction");
 
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Set up Cloudinary storage for multer
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: "uploads",
+    allowed_formats: ["jpg", "jpeg", "png", "gif"],
+  },
+});
+const upload = multer({ storage });
+
 // Middleware setup
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+// app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use(
   cors({
     origin: true, // Allow all origins
@@ -114,32 +133,37 @@ const isAdmin = (req, res, next) => {
 };
 
 // Middleware for cascading post deletion
-// Middleware for cascading post deletion
 const cascadeDeletePost = async (postId) => {
   try {
     const post = await Post.findById(postId);
-    if (!post) return;
-
-    // Delete associated image if exists
-    if (post.cover) {
-      fs.unlink(post.cover, (err) => {
-        if (err) console.error(`Error deleting image for post ${postId}:`, err);
-      });
+    if (!post) {
+      console.error("Post not found");
+      return;
     }
 
-    // Delete all associated comments and reactions
+    // Check if coverId exists and attempt deletion
+    if (post.coverId) {
+
+      // Try deleting the image on Cloudinary and log the response
+      const response = await cloudinary.uploader.destroy(post.coverId);
+      console.log("Cloudinary deletion response:", JSON.stringify(response, null, 2));
+    } else {
+      console.log("No coverId found for this post; skipping Cloudinary deletion.");
+    }
+
+    // Delete associated comments and reactions
     await Promise.all([
       Comment.deleteMany({ post: postId }),
       Reaction.deleteMany({ post: postId }),
     ]);
 
-    // Delete the post itself
     await Post.findByIdAndDelete(postId);
+    console.log("Post and related data deleted successfully.");
   } catch (error) {
-    console.error("Error in cascadeDeletePost:", error);
-    throw error;
+    console.error("Error in cascadeDeletePost:", JSON.stringify(error, null, 2));
   }
 };
+
 
 // Home route
 app.get("/", (req, res) => {
@@ -175,7 +199,7 @@ app.post("/register", async (req, res) => {
       username,
       email,
       password: hashedPassword,
-      isAdmin: email === process.env.ADMIN_EMAIL
+      isAdmin: email === process.env.ADMIN_EMAIL,
     });
 
     res.json({ message: "Registration successful", id: userDoc._id });
@@ -208,19 +232,20 @@ app.post("/login", async (req, res) => {
       { expiresIn: "7d" },
       (err, token) => {
         if (err) throw err;
-        res.cookie("token", token, {
-          httpOnly: false, // Allow JavaScript access
-          secure: true,
-          sameSite: 'none', // Allow cross-site cookies
-          maxAge: 7 * 24 * 60 * 60 * 1000
-        })
-        .json({
-          id: userDoc._id,
-          username: userDoc.username,
-          email: userDoc.email,
-          isAdmin: userDoc.isAdmin,
-          token: token // Send token in response for localStorage
-        });
+        res
+          .cookie("token", token, {
+            httpOnly: false, // Allow JavaScript access
+            secure: true,
+            sameSite: "none", // Allow cross-site cookies
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+          })
+          .json({
+            id: userDoc._id,
+            username: userDoc.username,
+            email: userDoc.email,
+            isAdmin: userDoc.isAdmin,
+            token: token, // Send token in response for localStorage
+          });
       }
     );
   } catch (error) {
@@ -230,12 +255,14 @@ app.post("/login", async (req, res) => {
 
 app.post("/logout", async (req, res) => {
   try {
-    res.cookie("token", "", {
-      httpOnly: false,
-      secure: true,
-      sameSite: 'none',
-      expires: new Date(0),
-    }).json({ message: "Logged out successfully" });
+    res
+      .cookie("token", "", {
+        httpOnly: false,
+        secure: true,
+        sameSite: "none",
+        expires: new Date(0),
+      })
+      .json({ message: "Logged out successfully" });
   } catch (error) {
     handleError(res, error, "Logout failed");
   }
@@ -315,7 +342,7 @@ app.post("/reset-password", async (req, res) => {
 app.get("/profile", async (req, res) => {
   try {
     const token = req.cookies.token || req.headers.authorization?.split(" ")[1];
-    
+
     if (!token) {
       return res.status(401).json({ message: "No token provided" });
     }
@@ -345,52 +372,20 @@ app.delete("/post/:id", authenticateToken, async (req, res) => {
   }
 });
 
-// Configure multer
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  },
-});
 
-const upload = multer({
-  storage: storage,
-  fileFilter: (req, file, cb) => {
-    const fileTypes = /jpeg|jpg|png|gif/;
-    const extname = fileTypes.test(
-      path.extname(file.originalname).toLowerCase()
-    );
-    const mimetype = fileTypes.test(file.mimetype);
-    if (mimetype && extname) {
-      return cb(null, true);
-    }
-    cb(new Error("Only image files are allowed!"));
-  },
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-  },
-});
-
-// Post routes
 app.post(
   "/post",
   authenticateToken,
   upload.single("file"),
   async (req, res) => {
     try {
-      if (!req.file) {
-        return res.status(400).json({ message: "Image file is required" });
-      }
-
       const { title, summary, content } = req.body;
       const postDoc = await Post.create({
         title,
         summary,
         content,
-        cover: req.file.path,
+        cover: req.file.path, // Store Cloudinary URL
+        coverId: req.file.filename, // Store Cloudinary Public ID for deletion
         author: req.user.id,
       });
       res.json(postDoc);
@@ -399,6 +394,7 @@ app.post(
     }
   }
 );
+
 // Admin router
 const adminRouter = express.Router();
 
@@ -495,30 +491,22 @@ app.put(
   upload.single("file"),
   async (req, res) => {
     try {
-      const { id } = req.params;
       const { title, summary, content } = req.body;
+      const post = await Post.findById(req.params.id);
+      if (!post) return res.status(404).json({ message: "Post not found" });
 
-      const post = await Post.findById(id);
-      if (!post) {
-        return res.status(404).json({ message: "Post not found" });
-      }
-
-      const updateData = { title, summary, content };
-
+      // If a new image is provided, delete the old one from Cloudinary
       if (req.file) {
-        updateData.cover = req.file.path;
-        if (post.cover) {
-          fs.unlink(post.cover, (err) => {
-            if (err) console.error("Error deleting old image:", err);
-          });
-        }
+        await cloudinary.uploader.destroy(post.coverId);
+        post.cover = req.file.path;
+        post.coverId = req.file.filename;
       }
+      post.title = title;
+      post.summary = summary;
+      post.content = content;
 
-      const updatedPost = await Post.findByIdAndUpdate(id, updateData, {
-        new: true,
-      }).populate("author", ["username"]);
-
-      res.json(updatedPost);
+      await post.save();
+      res.json(post);
     } catch (error) {
       handleError(res, error, "Failed to update post");
     }
