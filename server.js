@@ -143,12 +143,16 @@ const cascadeDeletePost = async (postId) => {
 
     // Check if coverId exists and attempt deletion
     if (post.coverId) {
-
       // Try deleting the image on Cloudinary and log the response
       const response = await cloudinary.uploader.destroy(post.coverId);
-      console.log("Cloudinary deletion response:", JSON.stringify(response, null, 2));
+      console.log(
+        "Cloudinary deletion response:",
+        JSON.stringify(response, null, 2)
+      );
     } else {
-      console.log("No coverId found for this post; skipping Cloudinary deletion.");
+      console.log(
+        "No coverId found for this post; skipping Cloudinary deletion."
+      );
     }
 
     // Delete associated comments and reactions
@@ -160,10 +164,12 @@ const cascadeDeletePost = async (postId) => {
     await Post.findByIdAndDelete(postId);
     console.log("Post and related data deleted successfully.");
   } catch (error) {
-    console.error("Error in cascadeDeletePost:", JSON.stringify(error, null, 2));
+    console.error(
+      "Error in cascadeDeletePost:",
+      JSON.stringify(error, null, 2)
+    );
   }
 };
-
 
 // Home route
 app.get("/", (req, res) => {
@@ -371,7 +377,6 @@ app.delete("/post/:id", authenticateToken, async (req, res) => {
     handleError(res, error, "Failed to delete post and associated content");
   }
 });
-
 
 app.post(
   "/post",
@@ -872,6 +877,44 @@ app.patch(
     }
   }
 );
+
+const Visitor = require("./models/Visitor"); // Adjust path as needed for your Visitor model
+// POST endpoint to add a new visitor
+app.post('/api/visitors', async (req, res) => {
+  try {
+    const { city, country } = req.body;
+    
+    if (!city || !country) {
+      return res.status(400).json({ error: 'City and country are required' });
+    }
+
+    const newVisitor = new Visitor({
+      city,
+      country,
+      dateAccepted: new Date(),
+    });
+
+    await newVisitor.save();
+    const visitorCount = await Visitor.countDocuments();
+    res.status(201).json({ count: visitorCount });
+  } catch (error) {
+    console.error("Error adding visitor:", error);
+    res.status(500).json({ error: 'Failed to add new visitor', details: error.message });
+  }
+});
+
+
+// GET endpoint to retrieve the visitor count
+app.get("/api/visitors", async (req, res) => {
+  try {
+    const visitorCount = await Visitor.countDocuments(); // Counts total visitors
+    res.json({ count: visitorCount });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to retrieve visitor count" });
+  }
+});
+
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
