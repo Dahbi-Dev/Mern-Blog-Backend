@@ -915,6 +915,16 @@ app.get("/api/visitors", async (req, res) => {
   }
 });
 
+// Route to count total users
+app.get("/api/user-count", async (req, res) => {
+  try {
+    const userCount = await User.countDocuments();
+    res.status(200).json({ count: userCount });
+  } catch (error) {
+    console.error("Error fetching user count:", error);
+    res.status(500).json({ error: "Failed to fetch user count" });
+  }
+});
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
